@@ -28,9 +28,9 @@ mod cost_functions {
     use crate::DVector;
     use crate::{CostFunc, NN};
 
-    fn mean_squared_error(batch:Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
+    fn mean_squared_error(batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
         let mut sum:f64 = 0.0;
-        for (input, expected) in &batch{
+        for (input, expected) in batch{
             let ouput: DVector<f64> = model.ff(input, false);
             let mut cost_vec: DVector<f64> = ouput - expected;
             cost_vec = cost_vec.map(|x| x.powi(2));
@@ -39,7 +39,7 @@ mod cost_functions {
         sum / (batch.len() as f64)
     }
 
-    pub fn eval_cost(func: CostFunc, batch:Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
+    pub fn eval_cost(func: CostFunc, batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
         match func {
             CostFunc::MeanSquaredError => mean_squared_error(batch, model)
         }
@@ -80,7 +80,7 @@ mod train_functions {
     
     fn back_prop(model: &mut NN) -> (Vec<DVector<f64>>, Vec<DMatrix<f64>>){
         // First all the activation influences
-        for i in (1..=model.layers.len()-1).rev() {
+        for i in (1..model.layers.len()).rev() {
             let (prev_slice, next_slice) = model.layers.split_at_mut(i);
             let prev_layer = &mut prev_slice[i-1];
             let curr_layer = &mut next_slice[0];
@@ -95,12 +95,12 @@ mod train_functions {
 
         // Ok, big part is done, now the bias gradient
         let mut biases_gradient: Vec<DVector<f64>> = [].to_vec();
-        for i in (1..=model.layers.len()-1).rev() {
+        for i in (1..model.layers.len()).rev() {
             let curr_layer = &model.layers[i];
             let z_on_act: &DVector<f64> = &act_inf(&curr_layer.activ_func, &curr_layer.z);
             let act_on_cost: &DVector<f64> = &curr_layer.influences;
             let bias_grad: DVector<f64> = z_on_act.component_mul(act_on_cost);
-            biases_gradient.push(bias_grad);
+            biases_gradient.insert(0, bias_grad);
         }
 
         // Then weight gradient (a bit tricky)
@@ -113,8 +113,8 @@ mod train_functions {
             let act_on_cost: &DVector<f64> = &curr_layer.influences;
             let z_on_act: &DVector<f64> = &act_inf(&curr_layer.activ_func, &curr_layer.z);
 
-            let z_on_cost: &DVector<f64> = &act_on_cost.component_mul(z_on_act);  // const in a column
-            let weight_on_z: &DVector<f64> = &prev_layer.a;  // const in a row
+            let z_on_cost: &DVector<f64> = &act_on_cost.component_mul(z_on_act);  // const in a row
+            let weight_on_z: &DVector<f64> = &prev_layer.a;  // const in a column
 
             // Creating the matrix that stores the influences of the weights on the curr layer Zs
             let mut prev_on_current: DMatrix<f64> = DMatrix::from_columns(&vec![weight_on_z.clone(); curr_layer.size]);
@@ -123,25 +123,73 @@ mod train_functions {
             // Creating the matrix that stores the influences of the Zs on the final cost
             let curr_on_cost: DMatrix<f64> = DMatrix::from_columns(&vec![z_on_cost.clone(); prev_layer.size]);
 
-            weight_gradient.push(prev_on_current.component_mul(&curr_on_cost));
+            weight_gradient.insert(0, prev_on_current.component_mul(&curr_on_cost));
         }
 
         (biases_gradient, weight_gradient)
     }
 
-    fn back_prop_train(model: &mut NN, batch: Vec<(DVector<f64>, DVector<f64>)>){
-        for (input, expected) in &batch{
+    fn back_prop_train(model: &mut NN, batch: &Vec<(DVector<f64>, DVector<f64>)>, step: f64){
+        let mut avrege_bias_gradient: Vec<DVector<f64>> = [].to_vec();
+        let mut avrege_weight_gradient: Vec<DMatrix<f64>> = [].to_vec();
+        for (input, expected) in batch{
             let ouput: DVector<f64> = model.ff(input, true);
-            let cost_vec: DVector<f64> = ouput - expected;
+            let cost_vec: DVector<f64> = &ouput - expected;
             // Setting up activation influences for the last layer
             let model_len: usize = model.layers.len()-1;
             model.layers[model_len].influences = cost_vec.map(|x| 2.0*x);
+            
+            let (biases_gradien, weight_gradient) = back_prop(model);
+            
+            if avrege_bias_gradient.len() == 0{
+                avrege_bias_gradient = biases_gradien;
+            }
+            else{
+                for i in 0..biases_gradien.len(){
+                    avrege_bias_gradient[i] += &biases_gradien[i];
+                }
+            }
+
+            if avrege_weight_gradient.len() == 0{
+                avrege_weight_gradient = weight_gradient;
+            }
+            else{
+                for i in 0..weight_gradient.len(){
+                    avrege_weight_gradient[i] += &weight_gradient[i];
+                }
+            }
+
+
+            /*
+            println!("INPUT: {}", input);
+            for l in &model.layers{
+                println!("ACTIVATIONS: {}", l.a);
+                println!("NEXT LAYER");
+            }
+            println!("OUTPUT: {}", ouput);
+
+            println!("BIASES GRADIENT");
+            for i in biases_gradien{
+                println!("{}", i);
+            }
+             */
+        }
+        avrege_bias_gradient = avrege_bias_gradient.iter().map(
+            |x:&DVector<f64>| x.scale(1.0/batch.len() as f64)).collect();
+
+        avrege_weight_gradient = avrege_weight_gradient.iter().map(
+            |x:&DMatrix<f64>| x.scale(1.0/batch.len() as f64)).collect();
+
+        // Update weight and biases
+        for i in 1..model.layers.len(){
+            model.layers[i].biases -= &avrege_bias_gradient[i-1].scale(step);
+            model.layers[i].weight_matrix -= &avrege_weight_gradient[i-1].scale(step);
         }
     }
 
-    pub fn train_model(model: &mut NN, batch: Vec<(DVector<f64>, DVector<f64>)>, func: TrainFunc){
+    pub fn train_model(model: &mut NN, batch: &Vec<(DVector<f64>, DVector<f64>)>, func: TrainFunc, step: f64){
         match func {
-            TrainFunc::BackProp => back_prop_train(model, batch),
+            TrainFunc::BackProp => back_prop_train(model, batch, step),
             TrainFunc::NEAT => (),
         }
     }
@@ -171,8 +219,9 @@ pub struct NN{
 }
 
 impl NN {
-    pub fn ff(&mut self, input: &DVector<f64>, record: bool) -> DVector<f64>{
+    fn ff(&mut self, input: &DVector<f64>, record: bool) -> DVector<f64>{
         let mut act_vec: DVector<f64> = input.clone();
+        if record { self.layers[0].a = input.clone(); }
         for i in 1..self.layers.len() {
             let cl = &mut self.layers[i];
             act_vec = &cl.weight_matrix * act_vec;
@@ -184,7 +233,7 @@ impl NN {
         act_vec
     }
 
-    pub fn cost(&mut self, batch:Vec<(DVector<f64>, DVector<f64>)>) -> f64{
+    pub fn cost(&mut self, batch: &Vec<(DVector<f64>, DVector<f64>)>) -> f64{
         cost_functions::eval_cost(self.cost.clone(), batch, self)
     }
 
@@ -203,16 +252,21 @@ impl NN {
         }
     }
     
-    pub fn train(&mut self, batch: Vec<(DVector<f64>, DVector<f64>)>, func: TrainFunc){
-        train_functions::train_model(self, batch, func);
+    pub fn train(&mut self, batch: &Vec<(DVector<f64>, DVector<f64>)>, func: TrainFunc, step: f64){
+        train_functions::train_model(self, batch, func, step);
     }
 
     pub fn print(&self){
-        println!("-------------------------------------");
+        println!("--------------- WEIGHTS ---------------");
         for i in 1..self.layers.len() {
             println!("{}", self.layers[i].weight_matrix)
         }
-        println!("-------------------------------------");
+        println!("---------------- BIASES ---------------");
+        for i in 1..self.layers.len() {
+            println!("{}", self.layers[i].biases)
+        }
+        println!("---------------------------------------");
+
     }
 }
 

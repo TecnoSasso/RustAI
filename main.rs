@@ -9,9 +9,7 @@ fn main() {
     let mut model = NN {
         layers: vec![
             Layer::linear(2, ReLu),
-            Layer::linear(3, Sigmoid),
-            Layer::linear(4, Sigmoid),
-            Layer::linear(5, Sigmoid),
+            Layer::linear(2, ReLu),
             Layer::linear(1, ReLu)
         ],
         cost: MeanSquaredError
@@ -26,5 +24,9 @@ fn main() {
         (DVector::from_vec(vec![1.0, 1.0]), DVector::from_vec(vec![0.0])),
     ].to_vec();
 
-    model.train(batch, BackProp);
+    for _ in 0..100{
+        model.train(&batch, BackProp, 0.1);
+        //model.print();
+        println!("{}", model.cost(&batch));
+    }
 }
