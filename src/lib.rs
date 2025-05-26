@@ -1,5 +1,8 @@
-use nalgebra::{DMatrix, DVector};
-use rand::{rng, seq::SliceRandom, Rng};
+use rand::{Rng};
+use nalgebra::{DVector, DMatrix};
+use custos::CUDA;
+use custos::Device;
+use custos_math::Matrix;
 
 // MODULES --------------------------------
 
@@ -46,73 +49,132 @@ mod activations {
 
 mod cost_functions {
     use crate::DVector;
-    use crate::{CostFunc, NN};
+    use crate::{LossFunc, NN};
 
     fn mean_squared_error(batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
-        let mut sum:f64 = 0.0;
+        let mut sum: f64 = 0.0;
         for (input, expected) in batch{
             let ouput: DVector<f64> = model.ff(input, false);
-            let mut cost_vec: DVector<f64> = ouput - expected;
-            cost_vec = cost_vec.map(|x| x.powi(2));
-            sum += cost_vec.sum() as f64;
+            let mut loss_vec: DVector<f64> = ouput - expected;
+            loss_vec = loss_vec.map(|x| x.powi(2));
+            sum += loss_vec.sum() as f64;
         }
         sum / (batch.len() as f64)
     }
 
-    pub fn eval_cost(func: CostFunc, batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
+    fn cross_entropy(batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
+        let mut sum: f64 = 0.0;
+        for (input, expected) in batch{
+            let output: DVector<f64> = model.ff(input, false);
+            let mut loss_vec: Vec<f64> = [].to_vec();
+            for i in 0..output.len(){
+                if expected[i] != 0.0{
+                    loss_vec.push(expected[i]*(output[i].ln()));
+                }
+                else{
+                    loss_vec.push(0.0);
+                }
+            }
+            sum += -loss_vec.iter().sum::<f64>();
+        }
+        sum / batch.len() as f64
+    }
+
+    pub fn eval_loss(func: LossFunc, batch: &Vec<(DVector<f64>, DVector<f64>)>, model:&mut NN) -> f64{
         match func {
-            CostFunc::MeanSquaredError => mean_squared_error(batch, model)
+            LossFunc::MeanSquaredError => mean_squared_error(batch, model),
+            LossFunc::CrossEntropy => cross_entropy(batch, model),
         }
     }
 }
 
 mod influences {
-    use nalgebra::DVector;
+    use crate::GradientType;
+    use nalgebra::{DMatrix, DVector};
 
-    use crate::{activations::activate, Activation};
-    fn relu_inf(x: &DVector<f64>) -> DVector<f64> {
-        x.map(|v| if v > 0.0 { 1.0 } else { 0.0 })
+    use crate::{activations::activate, Activation, LossFunc};
+    fn relu_inf(x: &DVector<f64>) -> GradientType {
+        GradientType::Vector(x.map(|v| if v > 0.0 { 1.0 } else { 0.0 }))
     }
     
-    fn sigmoid_inf(x: &DVector<f64>) -> DVector<f64> {
+    fn sigmoid_inf(x: &DVector<f64>) -> GradientType {
         use std::f64::consts::E;
-        x.map(|v|{
+        GradientType::Vector(x.map(|v|{
             let sig = 1.0/(1.0+E.powf(-v));
             sig*(1.0-sig)
-        })
+        }))
     }
 
-    fn tanh_inf(x: &DVector<f64>) -> DVector<f64> {
+    fn tanh_inf(x: &DVector<f64>) -> GradientType {
         use std::f64::consts::E;
-        x.map(|v| {
+        GradientType::Vector(x.map(|v| {
             let a = E.powf(v);
             let b = E.powf(-v);
             let t = (a - b) / (a + b);
             1.0 - t.powi(2)
-        })
+        }))
     }
 
-    fn softmax_inf(v: &DVector<f64>) -> DVector<f64> {
+    fn softmax_inf(v: &DVector<f64>) -> GradientType {
         let a: DVector<f64> = activate(&Activation::SoftMax, v);
-        a.map(|x| {
-            a.map(|y| {
-                if x == y{
-                    x*(1.0-x)
+        let mut cols: Vec<DVector<f64>> = [].to_vec();
+        for i in 0..a.len() {
+            cols.push(DVector::zeros(a.len()));
+            for j in 0..a.len(){
+                if i == j{
+                    cols[i][j] = a[i]*(1.0-a[i])
                 }
                 else{
-                    x*-y
+                    cols[i][j] = -a[i]*a[j]
                 }
-            }).sum()
-        })
+            }
+        }
+        GradientType::Matrix(DMatrix::from_columns(&cols))
     }
 
-    pub fn act_inf(act_fun: &Activation, x: &DVector<f64>) -> DVector<f64>{
+    pub fn act_inf(act_fun: &Activation, x: &DVector<f64>) -> GradientType{
         match act_fun {
-            Activation::ReLu => return relu_inf(x),
-            Activation::Sigmoid => return sigmoid_inf(x),
-            Activation::Tanh => return tanh_inf(x),
-            Activation::SoftMax => return softmax_inf(x),
+            Activation::ReLu => relu_inf(x),
+            Activation::Sigmoid => sigmoid_inf(x),
+            Activation::Tanh => tanh_inf(x),
+            Activation::SoftMax => softmax_inf(x),
         }
+    }
+
+    // COST FUNCTION 
+
+    fn mse_inf(o: &DVector<f64>, y: &DVector<f64>) -> DVector<f64>{
+        (o-y).scale(2.0)
+    }
+
+    fn xen_inf(p: &DVector<f64>, y: &DVector<f64>) -> DVector<f64>{
+        -y.component_div(p)
+    }
+
+    pub fn loss_inf(loss_fun: &LossFunc, o: &DVector<f64>, y: &DVector<f64>) -> DVector<f64>{
+        match loss_fun {
+            LossFunc::MeanSquaredError => mse_inf(o, y),
+            LossFunc::CrossEntropy => xen_inf(o, y),
+        }
+    }
+}
+
+mod model_evaluation {
+    use nalgebra::DVector;
+
+    use crate::NN;
+
+    pub fn accuracy(batch: &Vec<(DVector<f64>, DVector<f64>)>, model: &mut NN) -> f64 {
+        let mut sum: i32 = 0;
+        for (input, expected) in batch{
+            let output: DVector<f64> = model.ff(input, false);
+            let index_o = output.iter().position(|&r| r == output.max());
+            let index_e = expected.iter().position(|&r| r == expected.max());
+            if index_o == index_e {
+                sum += 1
+            }
+        }
+        sum as f64 / batch.len() as f64 * 100.0
     }
 }
 
@@ -120,9 +182,11 @@ mod train_functions {
     use nalgebra::DMatrix;
 
     use crate::influences::act_inf;
+    use crate::influences::loss_inf;
     use crate::TrainFunc;
     use crate::NN;
     use crate::DVector;
+    use crate::GradientType;
     
     fn back_prop(model: &mut NN) -> (Vec<DVector<f64>>, Vec<DMatrix<f64>>){
         // First all the activation influences
@@ -131,10 +195,20 @@ mod train_functions {
             let prev_layer = &mut prev_slice[i-1];
             let curr_layer = &mut next_slice[0];
 
-            let z_on_act: &DVector<f64> = &act_inf(&curr_layer.activ_func, &curr_layer.z);
+            let z_on_act: GradientType = act_inf(&curr_layer.activ_func, &curr_layer.z);
             let act_on_cost: &DVector<f64> = &curr_layer.influences;
             for j in 0..=prev_layer.size-1 {
-                let z_on_cost: DVector<f64> = z_on_act.component_mul(act_on_cost);
+                let z_on_cost: DVector<f64>;
+
+                match &z_on_act {
+                    GradientType::Vector(x) => {
+                        z_on_cost = x.component_mul(act_on_cost);
+                    }
+                    GradientType::Matrix(x) => {
+                        z_on_cost =  x * act_on_cost;
+                    }
+                }
+                
                 prev_layer.influences[j] = curr_layer.weight_matrix.column(j).dot(&z_on_cost);
             }
         }
@@ -143,9 +217,17 @@ mod train_functions {
         let mut biases_gradient: Vec<DVector<f64>> = [].to_vec();
         for i in (1..model.layers.len()).rev() {
             let curr_layer = &model.layers[i];
-            let z_on_act: &DVector<f64> = &act_inf(&curr_layer.activ_func, &curr_layer.z);
+            let z_on_act: GradientType = act_inf(&curr_layer.activ_func, &curr_layer.z);
             let act_on_cost: &DVector<f64> = &curr_layer.influences;
-            let bias_grad: DVector<f64> = z_on_act.component_mul(act_on_cost);
+            let bias_grad: DVector<f64>;
+            match &z_on_act {
+                GradientType::Vector(x) => {
+                    bias_grad = x.component_mul(act_on_cost);
+                }
+                GradientType::Matrix(x) => {
+                    bias_grad =  x * act_on_cost;
+                }
+            }
             biases_gradient.insert(0, bias_grad);
         }
 
@@ -157,9 +239,18 @@ mod train_functions {
             let curr_layer = &mut next_slice[0];
 
             let act_on_cost: &DVector<f64> = &curr_layer.influences;
-            let z_on_act: &DVector<f64> = &act_inf(&curr_layer.activ_func, &curr_layer.z);
+            let z_on_act: GradientType = act_inf(&curr_layer.activ_func, &curr_layer.z);
 
-            let z_on_cost: &DVector<f64> = &act_on_cost.component_mul(z_on_act);  // const in a row
+            let z_on_cost: DVector<f64>;  // const in a row
+            match &z_on_act {
+                GradientType::Vector(x) => {
+                    z_on_cost = act_on_cost.component_mul(&x);
+                }
+                GradientType::Matrix(x) => {
+                    z_on_cost =  x * act_on_cost;
+                }
+            }
+
             let weight_on_z: &DVector<f64> = &prev_layer.a;  // const in a column
 
             // Creating the matrix that stores the influences of the weights on the curr layer Zs
@@ -180,11 +271,10 @@ mod train_functions {
         let mut avrege_weight_gradient: Vec<DMatrix<f64>> = [].to_vec();
         for (input, expected) in batch{
             let ouput: DVector<f64> = model.ff(input, true);
-            let cost_vec: DVector<f64> = &ouput - expected;
 
             // Setting up activation influences for the last layer
             let model_len: usize = model.layers.len()-1;
-            model.layers[model_len].influences = cost_vec.map(|x| 2.0*x);
+            model.layers[model_len].influences = loss_inf(&model.loss, &ouput, &expected);
             
             let (biases_gradien, weight_gradient) = back_prop(model);
             
@@ -252,9 +342,9 @@ pub enum Activation {
     SoftMax,
 }
 
-#[derive(Clone)]
-pub enum CostFunc {
+pub enum LossFunc {
     MeanSquaredError,
+    CrossEntropy,
 }
 
 pub enum TrainFunc {
@@ -262,11 +352,16 @@ pub enum TrainFunc {
     NEAT,
 }
 
+enum GradientType {
+    Vector(DVector<f64>),
+    Matrix(DMatrix<f64>),
+}
+
 // STRUCTS ---------------------------
 
 pub struct NN{
     pub layers: Vec<Layer>,
-    pub cost: CostFunc,
+    pub loss: LossFunc,
 }
 
 impl NN {
@@ -284,15 +379,42 @@ impl NN {
         act_vec
     }
 
-    pub fn cost(&mut self, batch: &Vec<(DVector<f64>, DVector<f64>)>) -> f64{
-        cost_functions::eval_cost(self.cost.clone(), batch, self)
+    #[doc = "Returns the average cost of the network estimated by the loss function"]
+    pub fn cost(&mut self, data: &Vec<(DVector<f64>, DVector<f64>)>, times: usize, cost_func: LossFunc) -> f64{
+        let mut batch = [].to_vec();
+        let mut rng = rand::rng();
+        for _ in 0..times{
+            batch.push(data[rng.random_range(0..data.len())].clone());
+        }
+        cost_functions::eval_loss(cost_func, &batch, self)
     }
 
+    pub fn accuracy(&mut self, data: &Vec<(DVector<f64>, DVector<f64>)>, times: usize) -> f64 {
+        let mut batch = [].to_vec();
+        let mut rng = rand::rng();
+        for _ in 0..times{
+            batch.push(data[rng.random_range(0..data.len())].clone());
+        }
+        model_evaluation::accuracy(&batch, self)
+    }
+
+    #[doc = "Initializes the network weights and biases, does not return anything."]
     pub fn compile(&mut self){
         // Create all the weight matrices
         if self.layers.len() < 1 {
             panic!("Not enough layers");
         }
+
+        match self.loss {
+            LossFunc::CrossEntropy => {
+                match self.layers.last().unwrap().activ_func {
+                    Activation::SoftMax => (),
+                    _ => panic!("Cross Entropy function must take a probability distribution as input"),
+                }
+            },
+            _ => (),
+        }
+
         for i in 1..self.layers.len() {
 
             let prev_size = self.layers[i-1].size;
@@ -311,11 +433,15 @@ impl NN {
         }
     }
     
+    #[doc = "Trains the network with its `TrainFunc`, does not return anything."]
     pub fn train(&mut self, train_data: &Vec<(DVector<f64>, DVector<f64>)>, batch_size: usize, func: TrainFunc, step: f64){
+        
+        let device = CUDA::new(0).unwrap();
+
         let mut train_data_clone = train_data.clone();
         
-        let mut rng = rng();
-        train_data_clone.shuffle(&mut rng);
+        let n_baches = train_data_clone.len() / batch_size;
+        let mut i = 0;
 
         while train_data_clone.len() > 0 {
             let mut batch: Vec<(DVector<f64>, DVector<f64>)> = [].to_vec();
@@ -326,6 +452,8 @@ impl NN {
                 else{ break; }
             }
             train_functions::train_model(self, &batch, &func, step);
+            i+=1;
+            println!("Batch {} of {} completed  Accuracy: {:.2}", i, n_baches, self.accuracy(train_data, 500));
         }
     }
 
@@ -343,14 +471,14 @@ impl NN {
     }
 }
 
-pub struct Layer{
+pub struct Layer<'a>{
     pub size: usize,
     pub activ_func: Activation,
-    weight_matrix: DMatrix<f64>,
-    biases: DVector<f64>,
-    influences: DVector<f64>,
-    z: DVector<f64>,
-    a: DVector<f64>,
+    weight_matrix: Matrix<'a, f64, CUDA>,
+    biases: Matrix<'a, f64, CUDA>,
+    influences: Matrix<'a, f64, CUDA>,
+    z: Matrix<'a, f64, CUDA>,
+    a: Matrix<'a, f64, CUDA>,
 }
 
 
@@ -368,16 +496,11 @@ impl Layer {
     }
 
     fn init_matrix(&mut self, prev_size: usize, next_size: usize) {
-        use rand::rng;
-        let mut rng = rng();
         match self.activ_func{
-            Activation::Sigmoid => self.weight_matrix = weight_init::glorot(
-                prev_size, next_size, self.size, prev_size
-            ),
             Activation::ReLu => self.weight_matrix = weight_init::he(prev_size, self.size, prev_size),
-            _ => self.weight_matrix = DMatrix::<f64>::from_fn(
-                self.size, prev_size, |_, _| rng.random_range(0.0..=1.0),
-            )
+            
+            _ => self.weight_matrix = weight_init::glorot(
+                prev_size, next_size, self.size, prev_size),
         }
     }
 
