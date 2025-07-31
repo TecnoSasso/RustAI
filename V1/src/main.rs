@@ -7,11 +7,8 @@ use networks::LossFunc::*;
 use networks::TrainFunc::*;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::os::unix::net;
 use nalgebra::DVector;
-use nalgebra::dvector;
 
-/*
 fn one_hot_enc(n: usize, n_max: usize) -> DVector<f64> {
     let mut hot_vec: Vec<f64> = [].to_vec();
     for i in 0..n_max{
@@ -24,26 +21,8 @@ fn one_hot_enc(n: usize, n_max: usize) -> DVector<f64> {
     }
     DVector::from_vec(hot_vec)
 }
-*/
 
 fn main() {
-
-    let x: DVector<f64> = dvector![0.1, -2.0, 3.0];
-    
-    let m: DVector<f64> = dvector![1.0, 2.0, 3.0];
-
-    let a = networks::influences::softmax_inf(&x);
-    match a {
-        GradientType::Matrix(x) => {
-            println!("{}", x * &m);
-        },
-        GradientType::Vector(_) => {}
-    }
-
-    let b = networks::activations::activate(&SoftMax, &x);
-    println!("{}", (&m - &b.transpose() * &m).component_mul(&b));
-
-    /*
     let mut model = NN {
         layers: vec![
             Layer::linear(784, Tanh),
@@ -73,6 +52,5 @@ fn main() {
 
     // TRAIN MODEL
 
-    model.train(&train_data, 200, BackProp, 0.1);
-    */
+    model.train(&train_data, 200, BackProp, 0.01);
 }

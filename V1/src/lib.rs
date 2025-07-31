@@ -1,4 +1,3 @@
-use rand::{Rng};
 use nalgebra::{DVector, DMatrix};
 
 // MODULES --------------------------------
@@ -66,7 +65,7 @@ mod cost_functions {
             let mut loss_vec: Vec<f64> = [].to_vec();
             for i in 0..output.len(){
                 if expected[i] != 0.0{
-                    loss_vec.push(expected[i]*(output[i].ln()));
+                    loss_vec.push(expected[i]*(output[i].log2()));
                 }
                 else{
                     loss_vec.push(0.0);
@@ -74,6 +73,8 @@ mod cost_functions {
             }
             sum += -loss_vec.iter().sum::<f64>();
         }
+        // subtracting categoral entropy for kl divergence
+        sum -= (model.layers[model.layers.len()-1].size as f64).log2();
         sum / batch.len() as f64
     }
 
