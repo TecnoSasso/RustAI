@@ -344,6 +344,15 @@ pub enum LossFunc {
     CrossEntropy,
 }
 
+impl LossFunc {
+    pub fn clone(&mut self) -> Self {
+        match self {
+            LossFunc::MeanSquaredError => LossFunc::MeanSquaredError,
+            LossFunc::CrossEntropy => LossFunc::CrossEntropy
+        }
+    }
+}
+
 pub enum TrainFunc {
     BackProp,
     NEAT,
@@ -378,20 +387,12 @@ impl NN {
 
     #[doc = "Returns the average cost of the network estimated by the loss function"]
     pub fn cost(&mut self, data: &Vec<(DVector<f64>, DVector<f64>)>, times: usize, cost_func: LossFunc) -> f64{
-        let mut batch = [].to_vec();
-        let mut rng = rand::rng();
-        for _ in 0..times{
-            batch.push(data[rng.random_range(0..data.len())].clone());
-        }
+        let batch: Vec<(DVector<f64>, DVector<f64>)> = data[0..times].to_vec();
         cost_functions::eval_loss(cost_func, &batch, self)
     }
 
     pub fn accuracy(&mut self, data: &Vec<(DVector<f64>, DVector<f64>)>, times: usize) -> f64 {
-        let mut batch = [].to_vec();
-        let mut rng = rand::rng();
-        for _ in 0..times{
-            batch.push(data[rng.random_range(0..data.len())].clone());
-        }
+        let batch: Vec<(DVector<f64>, DVector<f64>)> = data[0..times].to_vec();
         model_evaluation::accuracy(&batch, self)
     }
 
@@ -448,7 +449,10 @@ impl NN {
             }
             train_functions::train_model(self, &batch, &func, step);
             i+=1;
-            println!("Batch {} of {} completed  Accuracy: {:.2}", i, n_baches, self.accuracy(train_data, 500));
+            let a = self.loss.clone();
+            println!("Batch {} of {} completed  Accuracy: {:6.2},  Cost: {:.5}",
+            i, n_baches, self.accuracy(train_data, if train_data.len() > 500 {500} else {train_data.len()}),
+            self.cost(train_data, if train_data.len() > 500 {500} else {train_data.len()}, a));
         }
     }
 
