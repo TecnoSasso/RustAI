@@ -52,5 +52,5 @@ fn main() {
 
     // TRAIN MODEL
 
-    model.train(&train_data, 200, BackProp, 0.01);
+    model.train(&train_data, 200, BackProp, 0.1);
 }
