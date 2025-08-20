@@ -5,6 +5,7 @@
 ## Try example in the stable release
 
 donwload Rust_AI.exe from the stable release
+
 run it
 
 ## Install
