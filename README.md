@@ -4,7 +4,7 @@
 
 ## Install
 
-clone the repository
+clone the repository or download the V1 release
 
 ```console
 git clone https://github.com/TecnoSasso/RustAI.git
