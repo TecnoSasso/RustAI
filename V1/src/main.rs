@@ -1,4 +1,7 @@
+use nalgebra::dvector;
+use nalgebra::ComplexField;
 use nalgebra::Vector;
+use networks::Activation;
 use networks::GradientType;
 use networks::NN;
 use networks::Layer;
@@ -26,11 +29,11 @@ fn main() {
     let mut model = NN {
         layers: vec![
             Layer::linear(784, Tanh),
-            Layer::linear(16, Tanh),
-            Layer::linear(16, Tanh),
-            Layer::linear(10, SoftMax),
+            Layer::linear(16, Sigmoid),
+            Layer::linear(16, Sigmoid),
+            Layer::linear(10, Sigmoid),
             ],
-            loss: CrossEntropy
+            loss: MeanSquaredError
         };
         
         model.compile();
@@ -41,13 +44,16 @@ fn main() {
     let file = File::open("MNIST_DataSet/mnist_train.csv").unwrap();
     let reader = BufReader::new(file);
 
+    let mut i = 0;
     for line in reader.lines() {
+        if i > 200*100 {break};
         let line = line.unwrap();
         train_data.push((DVector::from_vec(
             line.split_terminator(",").map(|x| x.parse::<f64>().unwrap() / 255.0).collect::<Vec<_>>().split_at(1).1.to_vec()
         ),
             one_hot_enc(line.split_terminator(",").collect::<Vec<_>>().to_vec().split_at(1).0[0].parse().unwrap(), 10)
         ));
+        i+=1;
     }
 
     // TRAIN MODEL

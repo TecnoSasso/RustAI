@@ -66,6 +66,12 @@ __global__ void component_mul(const float* mat_a, const float* mat_b, float* mat
     mat_c[idx] = mat_a[idx] * mat_b[idx];
 }
 
+__global__ void component_div(const float* mat_a, const float* mat_b, float* mat_c, unsigned int n) {
+    unsigned int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    if (idx >= n) return;
+    mat_c[idx] = mat_a[idx] / mat_b[idx];
+}
+
 __global__ void multiply(
     const float* mat_a, const float* mat_b, float* mat_c,
     unsigned int a_row_len, unsigned int b_row_len, unsigned int a_col_len){
@@ -91,6 +97,13 @@ __global__ void transpose(const float* mat_a, float* mat_c, unsigned int row_len
     unsigned int c_row_len = n/row_len;
 
     mat_c[id_y + id_x * c_row_len] = mat_a[id_x + id_y*row_len];
+}
+
+__global__ void diagonal(const float* mat_a, float* vec_c, unsigned int row_len){
+    unsigned int id_x = threadIdx.x + blockDim.x * blockIdx.x;
+    if (id_x >= row_len) return;
+
+    vec_c[id_x] = mat_a[id_x + id_x*row_len];
 }
 
 // ACTIVATION FUNCTIONS --------------------
@@ -185,11 +198,11 @@ __global__ void Cross_Entropy(
     float sum = 0.0f;
     for (int i=0; i<n/row_len; i++){
         if (mat_expected[id_x + i*row_len] != 0){
-            float element = mat_expected[id_x + i*row_len] * log(mat_output[id_x + i*row_len]);
+            float element = mat_expected[id_x + i*row_len] * log2(mat_expected[id_x + i*row_len] / mat_output[id_x + i*row_len]);
             sum += element;
         }
     }
-    vec_c[id_x] = -sum;
+    vec_c[id_x] = sum;
 }
 
 // STATISTIC FUNCTIONS ---------------------
@@ -220,12 +233,12 @@ __global__ void Accuracy(
     }
 }
 
-__global__ void Add_Bias(float* mat_a, float* bias, unsigned int row_len, unsigned int n) {
+__global__ void Add_Bias(float* mat_a, float* mat_c, float* bias, unsigned int row_len, unsigned int n) {
     unsigned int id_x = threadIdx.x + blockDim.x * blockIdx.x;
     if (id_x >= row_len) return;
 
     for (int i=0; i<n/row_len; i++){
-        mat_a[id_x + i*row_len] += bias[i];
+        mat_c[id_x + i*row_len] = mat_a[id_x + i*row_len] + bias[i];
     }
 }
 

@@ -30,10 +30,10 @@ fn main() {
 
     let mut model = NN {
         layers: vec![
-            Layer::linear(784, Tanh),
-            Layer::linear(16, Tanh),
-            Layer::linear(16, Tanh),
-            Layer::linear(10, SoftMax),
+            Layer::linear(784, Sigmoid),
+            Layer::linear(16, Sigmoid),
+            Layer::linear(16, Sigmoid),
+            Layer::linear(10, Sigmoid),
             ],
             loss: MeanSquaredError
         };
@@ -48,7 +48,7 @@ fn main() {
 
     let mut i = 0;
     for line in reader.lines() {
-        if i > 20*100 {break};
+        if i > 200*500 {break};
         let line = line.unwrap();
         train_data.push((
             line.split_terminator(",").map(|x| x.parse::<f32>().unwrap() / 255.0).collect::<Vec<_>>().split_at(1).1.to_vec()
@@ -58,5 +58,5 @@ fn main() {
         i+=1;
     }
 
-    model.train(&train_data, 20, BackProp, 0.1);
+    model.train(&train_data, 100, BackProp, 0.1);
 }

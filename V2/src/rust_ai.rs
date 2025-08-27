@@ -205,6 +205,33 @@ impl Matrix {
         Matrix::new(d_mat_c, self.row_len)
     }
 
+    fn component_div(&self, mat_b: &Matrix) -> Self {
+
+        if self.row_len != mat_b.row_len || self.data.len() != mat_b.data.len(){
+            panic!("Matrix size unmatched");
+        }
+
+        // Memory allocation
+        let d_mat_c: DeviceBuffer<f32> = DeviceBuffer::zeroed(self.data.len()).unwrap();
+
+        let module = Module::from_ptx(PTX, &[]).unwrap();
+        let function = module.get_function("component_div").unwrap();
+        let stream = Stream::new(StreamFlags::NON_BLOCKING, None).unwrap();
+
+        unsafe {
+            launch!(function<<<self.data.len() as u32, 32 as u32, 0, stream>>>(
+                self.data.as_device_ptr(),
+                mat_b.data.as_device_ptr(),
+                d_mat_c.as_device_ptr(),
+                self.data.len()
+            )).unwrap();
+        }
+
+        stream.synchronize().unwrap();
+
+        Matrix::new(d_mat_c, self.row_len)
+    }
+
     fn multiply(&self, mat_b: &Matrix) -> Self {
         
         if self.row_len <= 0 || mat_b.row_len <= 0 {
@@ -273,6 +300,27 @@ impl Matrix {
         Matrix::new(d_mat_c, self.data.len() / self.row_len)
     }
 
+    fn diagonal(&self) -> Self {
+
+        let d_vec_c: DeviceBuffer<f32> = DeviceBuffer::zeroed(self.row_len).unwrap();
+
+        let ptx = include_str!("../target/matrix_operation.ptx");
+        let module = Module::from_ptx(ptx, &[]).unwrap();
+        let function = module.get_function("diagonal").unwrap();
+        let stream = Stream::new(StreamFlags::NON_BLOCKING, None).unwrap();
+
+        unsafe {
+            launch!(function<<<(self.row_len / 32 +1) as u32, 32 as u32, 0, stream>>>(
+                self.data.as_device_ptr(),
+                d_vec_c.as_device_ptr(),
+                self.row_len as u32,
+            )).unwrap();
+        }
+
+        stream.synchronize().unwrap();
+        Matrix::new(d_vec_c, 1)
+    }
+
     fn internal_mean(&self) -> Self {
         let nbloks_x: u32 = (self.row_len / 32 +1) as u32;
         let nbloks_y: u32 = ((self.data.len() / self.row_len) / 32 +1) as u32;
@@ -297,11 +345,13 @@ impl Matrix {
         Matrix::new(d_vec_c, 1)
     }
 
-    fn add_bias(&self, bias: &Matrix){
+    fn add_bias(&self, bias: &Matrix) -> Self{
 
         if self.data.len()/self.row_len != bias.data.len() || bias.row_len != 1{
             panic!("Bias not valid");
         }
+
+        let d_mat_c: DeviceBuffer<f32> = DeviceBuffer::zeroed(self.data.len()).unwrap();
 
         let nbloks_x: u32 = (self.row_len / 32 +1) as u32;
         let nbloks_y: u32 = ((self.data.len() / self.row_len) / 32 +1) as u32;
@@ -314,6 +364,7 @@ impl Matrix {
         unsafe {
             launch!(function<<<(nbloks_x, nbloks_y), (32 as u32, 32 as u32), 0, stream>>>(
                 self.data.as_device_ptr(),
+                d_mat_c.as_device_ptr(),
                 bias.data.as_device_ptr(),
                 self.row_len,
                 self.data.len(),
@@ -321,6 +372,7 @@ impl Matrix {
         }
 
         stream.synchronize().unwrap();
+        Matrix::new(d_mat_c, self.row_len)
     }
 
     fn print(&self){
@@ -615,7 +667,8 @@ mod influences {
 
     fn softmax_inf(z: Matrix, act_on_cost: &Matrix) -> Matrix {
         activate(&Activation::SoftMax, &z);
-        act_on_cost.component_add(&z.transpose().multiply(act_on_cost).scale(-1.0)).component_mul(&z)
+        let dot_arr: &Matrix = &z.transpose().multiply(&act_on_cost).diagonal();
+        (act_on_cost.transpose().add_bias(&dot_arr.scale(-1.0))).transpose().component_mul(&z)
     }
 
     pub fn get_z_on_cost(act_fun: &Activation, z: Matrix, act_on_cost: &Matrix) -> Matrix {
@@ -654,6 +707,7 @@ mod train_functions {
     use crate::rust_ai::Matrix;
     use crate::TrainFunc;
     use crate::NN;
+    use super::LossFunc::CrossEntropy;
     
     fn back_prop(model: &mut NN, batch: &(Matrix, Matrix), step: f32) {
         // Feed forward
@@ -690,7 +744,7 @@ mod train_functions {
             
             let curr_z_on_cost: Matrix;
             if is_cross_entropy && i == n_layers-1 {
-                curr_z_on_cost = loss_inf(&model.loss, &output, &expected);
+                curr_z_on_cost = loss_inf(&CrossEntropy, &output, &expected);
             }
             else {
                 curr_z_on_cost = get_z_on_cost(
@@ -790,6 +844,14 @@ pub enum LossFunc {
     MeanSquaredError,
     CrossEntropy,
 }
+impl LossFunc {
+    fn clone(&mut self) -> Self {
+        match self {
+            LossFunc::MeanSquaredError => LossFunc::MeanSquaredError,
+            LossFunc::CrossEntropy => LossFunc::CrossEntropy
+        }
+    }
+}
 
 pub enum TrainFunc {
     BackProp,
@@ -827,18 +889,16 @@ impl NN {
         for i in 1..self.layers.len() {
             let curr_layer = &mut self.layers[i];
             act_mat = curr_layer.weight_matrix.multiply(&act_mat);
-            act_mat.add_bias(&curr_layer.biases);
+            act_mat = act_mat.add_bias(&curr_layer.biases);
             if record { curr_layer.z = act_mat.clone(); }  // for backprop
             activations::activate(&curr_layer.activ_func, &act_mat);
             if record { curr_layer.a = act_mat.clone(); }  // for backprop
         }
-        println!("FEED FORWAD COMPLETED\n");
         act_mat
     }
 
     #[doc = "Returns the average cost of the network estimated by the loss function"]
     pub fn cost(&mut self, data: &Vec<(Vec<f32>, Vec<f32>)>, times: usize, cost_func: &LossFunc) -> f32{
-        let rng = rand::rng();
         let batch: (Matrix, Matrix) = NN::batch_to_matrix(&data[0..times]);
         cost_functions::eval_loss(cost_func, &batch, self)
     }
@@ -887,13 +947,19 @@ impl NN {
             let batch: (Matrix, Matrix) = NN::batch_to_matrix(&train_data[i*batch_size..i*batch_size+batch_size]);
 
             train_functions::train_model(self, &batch, &func, step);
-            println!("Batch {} of {} completed  Cost: {:.2}", i+1, n_baches, self.cost(train_data, 50, &LossFunc::MeanSquaredError));
+            let a = self.loss.clone();
+            println!(
+                "Batch {} of {} completed  Accuracy: {:5.2}  Cost: {:.4}",
+                i+1, n_baches,
+                self.categoral_accuracy(train_data, 50),
+                self.cost(train_data, 50, &a)
+            );
         }
     }
 
     pub fn print(&self){
         println!("--------------- WEIGHTS ---------------");
-        for i in 1..self.layers.len() {
+        for i in 2..self.layers.len() {
             self.layers[i].weight_matrix.print_dim();
         }
         println!("---------------- BIASES ---------------");
