@@ -2,9 +2,15 @@
 
 **Rust AI** is a deep learning framework made in rust. the library let's you define the structure of a neural neural network and then train it using backpropagation.
 
+## Try example in the stable release
+
+donwload Rust_AI.exe from the stable release
+
+run it
+
 ## Install
 
-clone the repository
+clone the repository or download the V1 release
 
 ```console
 git clone https://github.com/TecnoSasso/RustAI.git
