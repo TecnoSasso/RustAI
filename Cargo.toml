@@ -1,9 +1,10 @@
 [package]
-name = "networks"
+name = "RustAI"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cust = "0.3.2"
 rand = "0.9.1"
 rand_distr = "0.5.1"
+nalgebra = "0.33.2"
+cust = "0.3.2"

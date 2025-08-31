@@ -1,4 +1,2 @@
-V1/MNIST_DataSet/
-V2/MNIST_DataSet/
-V1/target/
-V2/target/
+target/
+MNIST_DataSet/

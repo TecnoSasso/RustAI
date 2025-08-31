@@ -1,0 +1,12 @@
+pub const PTX: &'static str = include_str!("../../target/matrix_operation.ptx");
+pub mod structs;
+pub mod enums;
+pub mod activations;
+pub mod matrix;
+pub mod influences;
+pub mod cost_functions;
+pub mod weight_init;
+pub mod train_functions;
+pub mod model_evaluation;
+pub mod neural_network;
+pub mod layer;

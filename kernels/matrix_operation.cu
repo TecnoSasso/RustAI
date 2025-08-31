@@ -1,6 +1,5 @@
 extern "C" {
 #include <math.h>
-#include <stdio.h>
 
 struct DeviceMatrix {
     float* data;
